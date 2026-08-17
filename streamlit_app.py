@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 
-from app.db import engine, USER_ID
+from app.db import engine, USER_ID, aplicar_migrations
 
 st.set_page_config(
     page_title="Alvo Leilões",
@@ -21,6 +21,12 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+@st.cache_resource(show_spinner="Verificando banco de dados...")
+def _init_db():
+    aplicar_migrations()
+
+_init_db()
 
 st.title("Alvo Leilões")
 st.caption("Triagem de imóveis em leilão")

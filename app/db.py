@@ -18,3 +18,11 @@ def get_session():
         yield session
     finally:
         session.close()
+
+
+def aplicar_migrations() -> None:
+    """Aplica migrations pendentes. Chamada no startup do app (idempotente)."""
+    from alembic.config import Config
+    from alembic import command as alembic_command
+    cfg = Config("alembic.ini")
+    alembic_command.upgrade(cfg, "head")
