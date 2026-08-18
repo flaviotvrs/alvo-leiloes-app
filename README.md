@@ -164,6 +164,50 @@ pytest
 
 ---
 
+## Deploy — Streamlit Community Cloud + Neon (gratuito)
+
+### 1. Banco de dados no Neon
+
+1. Crie uma conta em [neon.tech](https://neon.tech) e crie um projeto
+2. Copie a **Connection string** no formato:
+   ```
+   postgresql://user:password@host/dbname?sslmode=require
+   ```
+3. As migrations são aplicadas automaticamente na primeira execução do app
+
+### 2. App no Streamlit Community Cloud
+
+1. Acesse [share.streamlit.io](https://share.streamlit.io) e conecte seu repositório GitHub
+2. Configure o app:
+   - **Main file path:** `streamlit_app.py`
+   - **Python version:** 3.12
+3. Em **Advanced settings → Secrets**, adicione:
+   ```toml
+   DATABASE_URL = "postgresql://user:password@host/dbname?sslmode=require"
+   APP_USER_ID = "seu_nome"
+   ```
+4. Clique em **Deploy**
+
+> O app "dorme" após 15 minutos sem acesso e leva ~5 s para acordar — comportamento normal no plano gratuito.
+
+### 3. Importar a planilha (local → Neon)
+
+A importação é feita localmente apontando para o banco remoto:
+
+```bash
+DATABASE_URL="postgresql://..." python - <<'EOF'
+from app.importers.caixa import importar_planilha_caixa
+from app.db import SessionLocal
+
+with SessionLocal() as session:
+    importados, ignorados = importar_planilha_caixa("data/planilha.csv", session)
+    session.commit()
+    print(f"{importados} importados, {ignorados} já existiam")
+EOF
+```
+
+---
+
 ## Design para agentes autônomos (pós-MVP)
 
 A função `_coletar_inputs_manuais()` em `Detalhe.py` isola toda a coleta manual de inputs e retorna um dict padronizado com `fonte="manual"`. No futuro, agentes especializados (análise de PDF do edital, pesquisa de comparáveis, estimativa de reforma) poderão substituir essa função mantendo o mesmo contrato — sem alterar a calculadora nem o modelo de persistência. O campo `fonte_valor_mercado` em `AnaliseFinanceira` rastreia a origem de cada análise.
