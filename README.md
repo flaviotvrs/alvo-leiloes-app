@@ -60,6 +60,12 @@ margem          = lucro_líquido / total_investido × 100
 - Análises salvas no banco e exibidas em histórico por imóvel
 - Análises são privadas por usuário (configurável via `APP_USER_ID` no `.env`)
 
+**Importar planilha** (`pages/ImportarPlanilha.py`)
+- Upload da planilha da Caixa (`.csv` ou `.xlsx`) direto pelo navegador — evita o problema de permissão de pasta do macOS ao ler arquivos via terminal
+- Mostra na hora se a importação deu certo ou falhou (com a mensagem de erro)
+- Histórico com todas as importações anteriores (data/hora, arquivo, status, imóveis importados/ignorados) — útil para conferir se você não esqueceu de importar em algum dia
+- Página de administração; será restrita a administradores quando o controle de acesso for implementado
+
 ---
 
 ## Stack
@@ -104,27 +110,17 @@ APP_USER_ID=seu_nome   # identifica o dono das análises salvas
 alembic upgrade head
 ```
 
-### 5. Importar a planilha da Caixa
-
-Baixe a planilha em [leiloes.caixa.gov.br](https://venda-imoveis.caixa.gov.br/sistema/download-lista.asp) e importe:
-
-```python
-from app.importers.caixa import importar_planilha_caixa
-from app.db import SessionLocal
-
-with SessionLocal() as session:
-    importados, ignorados = importar_planilha_caixa("planilha.csv", session)
-    session.commit()
-    print(f"{importados} importados, {ignorados} já existiam")
-```
-
-### 6. Rodar a interface
+### 5. Rodar a interface
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
 Acesse em `http://localhost:8501`.
+
+### 6. Importar a planilha da Caixa
+
+Baixe a planilha em [leiloes.caixa.gov.br](https://venda-imoveis.caixa.gov.br/sistema/download-lista.asp) e acesse a página **"Importar Planilha"** na interface. Faça upload do arquivo (`.csv` ou `.xlsx`) pelo navegador e acompanhe o resultado e o histórico de importações ali mesmo.
 
 ---
 
@@ -134,21 +130,25 @@ Acesse em `http://localhost:8501`.
 radar-leiloes/
 ├── streamlit_app.py          # Página principal: lista de imóveis
 ├── pages/
-│   └── Detalhe.py            # Detalhe do imóvel + calculadora
+│   ├── Detalhe.py            # Detalhe do imóvel + calculadora
+│   └── ImportarPlanilha.py   # Upload + histórico de importações (admin)
 ├── app/
-│   ├── models.py             # Modelos SQLAlchemy (Imovel, Edital, AnaliseFinanceira)
+│   ├── models.py             # Modelos SQLAlchemy (Imovel, Edital, AnaliseFinanceira, ImportacaoPlanilha)
 │   ├── db.py                 # Engine, SessionLocal, USER_ID
 │   ├── calculators/
 │   │   └── viabilidade.py    # Calculadora financeira
 │   ├── importers/
 │   │   └── caixa.py          # Importador da planilha Caixa
+│   ├── parsers/
+│   │   └── descricao_imovel.py  # Parser regex da descrição estruturada
 │   └── tables/
 │       ├── emolumentos_mg.py # Tabela TJMG 2026 de emolumentos
 │       └── itbi.py           # Alíquotas de ITBI por município
 ├── migrations/               # Migrations Alembic
 ├── tests/
-│   ├── test_calculadora.py   # Testes da calculadora e tabelas
-│   └── test_importador_caixa.py
+│   ├── test_calculadora.py       # Testes da calculadora e tabelas
+│   ├── test_importador_caixa.py
+│   └── test_descricao_imovel.py
 ├── docker-compose.yml
 ├── pyproject.toml
 └── .env.example

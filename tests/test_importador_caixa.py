@@ -12,8 +12,9 @@ from app.importers.caixa import (
     _desconto,
     _tipo_da_descricao,
     importar_planilha_caixa,
+    importar_planilha_caixa_com_historico,
 )
-from app.models import Edital, Imovel
+from app.models import Edital, Imovel, StatusImportacao
 
 
 def _planilha_fake(linhas: list[dict]) -> io.BytesIO:
@@ -99,6 +100,54 @@ def test_importa_linha_basica():
     assert edital.modalidade_venda == "Licitação Aberta"
 
 
+def test_importa_linha_com_caracteristicas_da_descricao():
+    linha = {
+        "N° do imóvel":       "MG-99999",
+        "UF":                 "MG", "Cidade": "BH", "Bairro": "X",
+        "Endereço":           "Rua A", "Preço": "100.000,00",
+        "Valor de avaliação": "120.000,00", "Desconto": "16%",
+        "Financiamento":      "Sim",
+        "Descrição": (
+            "Apartamento, 78.72 de área total, 44.45 de área privativa, "
+            "0.00 de área do terreno, 2 qto(s), WC, 1 sala(s), cozinha, "
+            "1 vaga(s) de garagem."
+        ),
+        "Modalidade de venda": "Leilão", "Link de acesso": "http://x",
+    }
+    session = _session_mock_sem_duplicata()
+    importar_planilha_caixa(_planilha_fake([linha]), session)
+
+    imovel: Imovel = session.add.call_args_list[0][0][0]
+    assert float(imovel.area_total_m2) == 78.72
+    assert float(imovel.area_privativa_m2) == 44.45
+    assert imovel.area_terreno_m2 is None
+    assert imovel.quartos == 2
+    assert imovel.salas == 1
+    assert imovel.vagas_garagem == 1
+    assert imovel.possui_wc is True
+    assert imovel.possui_cozinha is True
+    assert imovel.descricao_parsing_incompleto is False
+
+
+def test_importa_linha_com_descricao_fora_do_padrao_marca_incompleto():
+    linha = {
+        "N° do imóvel":       "MG-88888",
+        "UF":                 "MG", "Cidade": "BH", "Bairro": "X",
+        "Endereço":           "Rua A", "Preço": "100.000,00",
+        "Valor de avaliação": "120.000,00", "Desconto": "16%",
+        "Financiamento":      "Sim",
+        "Descrição":          "Formato totalmente diferente do esperado",
+        "Modalidade de venda": "Leilão", "Link de acesso": "http://x",
+    }
+    session = _session_mock_sem_duplicata()
+    importar_planilha_caixa(_planilha_fake([linha]), session)
+
+    imovel: Imovel = session.add.call_args_list[0][0][0]
+    assert imovel.descricao_parsing_incompleto is True
+    assert imovel.area_total_m2 is None
+    assert imovel.quartos is None
+
+
 def test_idempotente_duplicata():
     linha = {
         "N° do imóvel": "MG-12345",
@@ -117,6 +166,78 @@ def test_idempotente_duplicata():
     assert importados == 0
     assert ignorados == 1
     session.add.assert_not_called()
+
+
+def test_le_planilha_csv_via_upload_sem_path():
+    """Reproduz o upload do Streamlit: objeto tipo arquivo com `.name`, não
+    um `str`/`Path` — precisa ser detectado como CSV mesmo assim."""
+    conteudo = (
+        "\n"
+        " Lista de Imóveis da Caixa;;Data de geração:;01/01/2026;;;;;;;\n"
+        " N° do imóvel;UF;Cidade;Bairro;Endereço;Preço;Valor de avaliação;"
+        "Desconto;Financiamento;Descrição;Modalidade de venda;Link de acesso\n"
+        "\n"
+        " TESTE-CSV-001 ;MG ;BH ;X ;Rua A ;100.000,00;120.000,00;16.67;Não;"
+        "Apartamento, 78.72 de área total, 44.45 de área privativa, 0.00 de "
+        "área do terreno,  2 qto(s), WC, 1 sala(s), cozinha, 1 vaga(s) de "
+        "garagem.;Licitação Aberta;http://x\n"
+    ).encode("latin-1")
+    upload = io.BytesIO(conteudo)
+    upload.name = "planilha.csv"  # atributo exposto pelo UploadedFile do Streamlit
+
+    session = _session_mock_sem_duplicata()
+    importados, ignorados = importar_planilha_caixa(upload, session)
+
+    assert importados == 1
+    imovel: Imovel = session.add.call_args_list[0][0][0]
+    assert imovel.id_externo == "TESTE-CSV-001"
+    assert imovel.quartos == 2
+
+
+# ---------------------------------------------------------------------------
+# Wrapper com histórico
+# ---------------------------------------------------------------------------
+
+def test_wrapper_com_historico_registra_sucesso():
+    linha = {
+        "N° do imóvel": "MG-77777",
+        "UF": "MG", "Cidade": "BH", "Bairro": "X",
+        "Endereço": "Rua A", "Preço": "100.000,00",
+        "Valor de avaliação": "120.000,00", "Desconto": "16%",
+        "Financiamento": "Sim", "Descrição": "CASA",
+        "Modalidade de venda": "Leilão", "Link de acesso": "http://x",
+    }
+    session = _session_mock_sem_duplicata()
+
+    registro = importar_planilha_caixa_com_historico(
+        _planilha_fake([linha]), "planilha.xlsx", session, usuario="flavio"
+    )
+
+    assert registro.status == StatusImportacao.sucesso
+    assert registro.imoveis_importados == 1
+    assert registro.imoveis_ignorados == 0
+    assert registro.nome_arquivo == "planilha.xlsx"
+    assert registro.usuario == "flavio"
+    assert registro.finalizado_em is not None
+    assert registro.mensagem_erro is None
+    session.commit.assert_called()
+
+
+def test_wrapper_com_historico_registra_erro_sem_propagar_excecao():
+    arquivo_invalido = io.BytesIO(b"isto nao e um xlsx valido")
+    arquivo_invalido.name = "planilha.xlsx"
+    session = _session_mock_sem_duplicata()
+
+    registro = importar_planilha_caixa_com_historico(
+        arquivo_invalido, "planilha.xlsx", session
+    )
+
+    assert registro.status == StatusImportacao.erro
+    assert registro.mensagem_erro
+    assert registro.imoveis_importados is None
+    assert registro.finalizado_em is not None
+    session.rollback.assert_called_once()
+    session.commit.assert_called()
 
 
 def test_linha_sem_numero_ignorada():

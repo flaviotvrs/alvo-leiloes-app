@@ -14,13 +14,16 @@ Uso:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.models import Edital, Imovel, TipoImovel
+from app.models import Edital, Imovel, ImportacaoPlanilha, StatusImportacao, TipoImovel
+from app.parsers.descricao_imovel import parsear_descricao
 
 logger = logging.getLogger(__name__)
 
@@ -101,16 +104,83 @@ def importar_planilha_caixa(
     return importados, ignorados
 
 
+@dataclass
+class ResultadoImportacao:
+    """Snapshot do resultado, desacoplado da sessão/ORM: o registro em si é
+    gravado no banco, mas o chamador não deve depender do objeto ORM (que
+    expira os atributos após o commit e vira inacessível assim que a sessão
+    fecha — `DetachedInstanceError`)."""
+
+    status: str
+    nome_arquivo: str
+    usuario: str | None
+    imoveis_importados: int | None
+    imoveis_ignorados: int | None
+    mensagem_erro: str | None
+    finalizado_em: datetime
+
+
+def importar_planilha_caixa_com_historico(
+    arquivo: str | Path | IO,
+    nome_arquivo: str,
+    session: Session,
+    usuario: str | None = None,
+) -> ResultadoImportacao:
+    """Executa `importar_planilha_caixa` registrando o resultado (sucesso ou
+    erro) em `ImportacaoPlanilha`, para permitir conferir depois se cada
+    upload rodou corretamente. Nunca propaga exceção — o erro vira parte do
+    registro de histórico.
+    """
+    registro = ImportacaoPlanilha(
+        nome_arquivo=nome_arquivo,
+        usuario=usuario,
+        status=StatusImportacao.erro,
+    )
+    try:
+        importados, ignorados = importar_planilha_caixa(arquivo, session)
+        registro.imoveis_importados = importados
+        registro.imoveis_ignorados = ignorados
+        registro.status = StatusImportacao.sucesso
+    except PermissionError as e:
+        session.rollback()
+        registro.mensagem_erro = (
+            f"Permissão negada ao ler o arquivo: {e}. No macOS isso costuma ser "
+            "o app sem acesso à pasta (TCC) — libere em Ajustes do Sistema > "
+            "Privacidade e Segurança > Arquivos e Pastas."
+        )
+        logger.exception("Falha de permissão ao importar planilha %s", nome_arquivo)
+    except Exception as e:
+        session.rollback()
+        registro.mensagem_erro = str(e)
+        logger.exception("Falha ao importar planilha %s", nome_arquivo)
+    finally:
+        registro.finalizado_em = datetime.now(timezone.utc).replace(tzinfo=None)
+        session.add(registro)
+        session.commit()
+
+    return ResultadoImportacao(
+        status=registro.status,
+        nome_arquivo=registro.nome_arquivo,
+        usuario=registro.usuario,
+        imoveis_importados=registro.imoveis_importados,
+        imoveis_ignorados=registro.imoveis_ignorados,
+        mensagem_erro=registro.mensagem_erro,
+        finalizado_em=registro.finalizado_em,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers internos
 # ---------------------------------------------------------------------------
 
 def _ler_planilha(arquivo: str | Path | IO, sheet_name: int | str) -> pd.DataFrame:
-    path = Path(arquivo) if isinstance(arquivo, str) else arquivo
-    if isinstance(path, Path) and path.suffix.lower() == ".csv":
+    # `arquivo` pode ser um caminho (str/Path) ou um objeto tipo arquivo (ex: upload
+    # do Streamlit) — nesse caso o nome original vem no atributo `.name`.
+    nome = arquivo if isinstance(arquivo, (str, Path)) else getattr(arquivo, "name", "")
+    if str(nome).lower().endswith(".csv"):
         # Planilha Caixa: latin-1, ponto-e-vírgula, 1ª linha é título (não cabeçalho)
         df = pd.read_csv(
-            path,
+            arquivo,
             sep=";",
             encoding="latin-1",
             skiprows=2,      # linha em branco + linha de título
@@ -119,7 +189,7 @@ def _ler_planilha(arquivo: str | Path | IO, sheet_name: int | str) -> pd.DataFra
         )
         df.columns = df.columns.str.strip()
         return df
-    return pd.read_excel(path, sheet_name=sheet_name, dtype=str)
+    return pd.read_excel(arquivo, sheet_name=sheet_name, dtype=str)
 
 
 def _normalizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
@@ -131,6 +201,15 @@ def _normalizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _construir_imovel(row: pd.Series, id_externo: str) -> Imovel:
+    descricao = _str(row.get("descricao"))
+    caracteristicas = parsear_descricao(descricao)
+    if caracteristicas.parsing_incompleto:
+        logger.warning(
+            "Descrição do imóvel %s não bateu no formato conhecido: %r",
+            id_externo,
+            descricao,
+        )
+
     return Imovel(
         fonte="caixa",
         id_externo=id_externo,
@@ -140,7 +219,16 @@ def _construir_imovel(row: pd.Series, id_externo: str) -> Imovel:
         bairro=_str(row.get("bairro")),
         cidade=_str(row.get("cidade")),
         uf=_str(row.get("uf")),
-        descricao=_str(row.get("descricao")),
+        descricao=descricao,
+        area_total_m2=caracteristicas.area_total_m2,
+        area_privativa_m2=caracteristicas.area_privativa_m2,
+        area_terreno_m2=caracteristicas.area_terreno_m2,
+        quartos=caracteristicas.quartos,
+        salas=caracteristicas.salas,
+        vagas_garagem=caracteristicas.vagas_garagem,
+        possui_wc=caracteristicas.possui_wc,
+        possui_cozinha=caracteristicas.possui_cozinha,
+        descricao_parsing_incompleto=caracteristicas.parsing_incompleto,
     )
 
 

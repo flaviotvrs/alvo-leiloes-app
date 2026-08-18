@@ -46,6 +46,11 @@ class ResultadoAnalise(str, enum.Enum):
     nao_viavel = "nao_viavel"
 
 
+class StatusImportacao(str, enum.Enum):
+    sucesso = "sucesso"
+    erro = "erro"
+
+
 class Imovel(Base):
     __tablename__ = "imoveis"
 
@@ -61,8 +66,18 @@ class Imovel(Base):
     uf: Mapped[str | None] = mapped_column(String(2))
     regiao: Mapped[str | None] = mapped_column(String(100))
     cep: Mapped[str | None] = mapped_column(String(9))
-    metragem: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     descricao: Mapped[str | None] = mapped_column(Text)
+
+    # Campos extraídos da descrição (parser determinístico, ver app/parsers/descricao_imovel.py)
+    area_total_m2: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    area_privativa_m2: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    area_terreno_m2: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    quartos: Mapped[int | None] = mapped_column(Integer)
+    salas: Mapped[int | None] = mapped_column(Integer)
+    vagas_garagem: Mapped[int | None] = mapped_column(Integer)
+    possui_wc: Mapped[bool | None] = mapped_column(Boolean)
+    possui_cozinha: Mapped[bool | None] = mapped_column(Boolean)
+    descricao_parsing_incompleto: Mapped[bool] = mapped_column(Boolean, default=False)
 
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     atualizado_em: Mapped[datetime] = mapped_column(
@@ -152,3 +167,22 @@ class AnaliseFinanceira(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     imovel: Mapped[Imovel] = relationship(back_populates="analises")
+
+
+class ImportacaoPlanilha(Base):
+    """Histórico de uploads de planilha, para conferir se cada importação rodou
+    com sucesso (ex: um dia sem upload não passa despercebido)."""
+
+    __tablename__ = "importacoes_planilha"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fonte: Mapped[str] = mapped_column(Enum(Fonte), nullable=False, default=Fonte.caixa)
+    nome_arquivo: Mapped[str] = mapped_column(String(300))
+    usuario: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(Enum(StatusImportacao), nullable=False)
+    imoveis_importados: Mapped[int | None] = mapped_column(Integer)
+    imoveis_ignorados: Mapped[int | None] = mapped_column(Integer)
+    mensagem_erro: Mapped[str | None] = mapped_column(Text)
+
+    iniciado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    finalizado_em: Mapped[datetime | None] = mapped_column(DateTime)
