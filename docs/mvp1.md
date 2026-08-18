@@ -1,6 +1,6 @@
 # MVP 1 — Alvo Leilões
 
-> Baseado em `docs/processo.md`. Este documento é o corte de escopo do primeiro incremento entregável.
+> Baseado em `docs/processo-alvo-leiloes.md`. Este documento é o corte de escopo do primeiro incremento entregável.
 
 ---
 

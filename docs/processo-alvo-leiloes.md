@@ -1,4 +1,5 @@
 # Processo de Garimpo e Análise de Viabilidade — Leilões Imobiliários Extrajudiciais
+> **Projeto: Alvo Leilões**
 
 > Documento vivo. Objetivo: mapear o processo ponta a ponta (prospecção → pós-arremate) para depois fatiar em MVPs de automação. Itens marcados **[TBD]** ainda precisam de input. Itens marcados **[VERIFICAR]** são pontos jurídicos/técnicos que assumi com base em conhecimento geral e merecem confirmação. **v2 — incorpora respostas do usuário e o checklist pessoal de leilões extrajudiciais.**
 
