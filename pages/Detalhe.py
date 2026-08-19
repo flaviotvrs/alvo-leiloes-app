@@ -27,7 +27,10 @@ from app.calculators.viabilidade import (
     calcular,
 )
 from app.db import SessionLocal, USER_ID
-from app.models import AnaliseFinanceira, Imovel
+from app.models import AnaliseFinanceira, Imovel, StatusJob
+from app.services import jobs as jobs_service
+
+AGENTE_MERCADO = "mercado-extractor"
 
 
 # ── Funções auxiliares ────────────────────────────────────────────────────────
@@ -38,20 +41,92 @@ def _fmt(v, prefixo="R$ ") -> str:
     return f"{prefixo}{float(v):,.2f}"
 
 
-def _coletar_inputs_manuais(dados: dict) -> dict:
+def _extrair_campo(campos: list[dict] | None, nome: str) -> dict | None:
+    if not campos:
+        return None
+    return next((c for c in campos if c["campo"] == nome), None)
+
+
+def _secao_agente_mercado(
+    imovel_id: int,
+    job_status: str | None,
+    job_criado_em,
+    job_falhou_erro: str | None,
+    envelope_campos: list[dict] | None,
+    envelope_versao_agente: str | None,
+) -> tuple[Decimal | None, str]:
+    """Botão de trigger + exibição de status/resultado do mercado-extractor.
+
+    Retorna (valor_sugerido, fonte_sugerida) para pré-preencher o input manual
+    — a lógica em si é "modo de revisão/override" (ver docstring de
+    _coletar_inputs_manuais), o agente só sugere um ponto de partida.
+    """
+    valor_sugerido: Decimal | None = None
+    fonte_sugerida = "manual"
+
+    if job_status in (StatusJob.pendente, StatusJob.em_execucao):
+        criado_fmt = job_criado_em.strftime("%d/%m/%Y %H:%M") if job_criado_em else "—"
+        st.info(f"🔎 Busca de valor de mercado em andamento (status: {job_status}, criada em {criado_fmt}). Atualize a página em alguns minutos.")
+        return None, "manual"
+
+    if envelope_campos:
+        campo_valor = _extrair_campo(envelope_campos, "valor_total_estimado")
+        campo_metodo = _extrair_campo(envelope_campos, "metodo")
+        campo_regiao = _extrair_campo(envelope_campos, "regiao_baixa_liquidez")
+        campo_comparaveis = _extrair_campo(envelope_campos, "comparaveis")
+
+        if campo_valor and campo_valor["valor"] is not None:
+            valor_sugerido = Decimal(str(campo_valor["valor"]))
+            fonte_sugerida = f"mercado-extractor v{envelope_versao_agente}"
+            badge = " ⚠️ região de baixa liquidez" if campo_regiao and campo_regiao["valor"] else ""
+            st.success(
+                f"🤖 Valor sugerido pelo agente: R$ {float(valor_sugerido):,.2f} "
+                f"(confiança {campo_valor['confianca']:.0%}, método: "
+                f"{campo_metodo['valor'] if campo_metodo else '—'}){badge}"
+            )
+            if campo_comparaveis and campo_comparaveis["valor"]:
+                with st.expander(f"Comparáveis usados como evidência ({len(campo_comparaveis['valor'])})"):
+                    st.dataframe(pd.DataFrame(campo_comparaveis["valor"]), use_container_width=True, hide_index=True)
+        else:
+            st.warning("🤖 O agente rodou mas não encontrou comparáveis confiáveis — revise manualmente.")
+
+        if st.button("🔁 Buscar novamente"):
+            with SessionLocal() as s:
+                jobs_service.criar_job(s, imovel_id, AGENTE_MERCADO, user_id=USER_ID)
+            st.rerun()
+        return valor_sugerido, fonte_sugerida
+
+    if job_status == StatusJob.falhou:
+        st.error(f"🤖 Última busca de valor de mercado falhou: {job_falhou_erro or 'erro desconhecido'}")
+        if st.button("🔁 Tentar novamente"):
+            with SessionLocal() as s:
+                jobs_service.criar_job(s, imovel_id, AGENTE_MERCADO, user_id=USER_ID)
+            st.rerun()
+        return None, "manual"
+
+    if st.button("🔎 Buscar valor de mercado (agente)"):
+        with SessionLocal() as s:
+            jobs_service.criar_job(s, imovel_id, AGENTE_MERCADO, user_id=USER_ID)
+        st.rerun()
+    return None, "manual"
+
+
+def _coletar_inputs_manuais(dados: dict, valor_sugerido: Decimal | None = None, fonte_sugerida: str = "manual") -> dict:
     """Coleta os inputs necessários via formulário e retorna dict padronizado.
 
-    Chave "fonte"="manual" para rastreabilidade de origem dos valores.
+    Chave "fonte" indica a origem do valor de mercado: "manual" por padrão, ou
+    o identificador do agente (ex. "mercado-extractor v0.1.0") quando o valor
+    sugerido não foi alterado pelo usuário — ver _secao_agente_mercado.
 
-    PONTO DE INJEÇÃO DE AGENTE (pós-MVP 1):
-        Substituir esta função por uma que consulte agentes autônomos,
-        mantendo o mesmo contrato de retorno (mesmo dict, mesma chave "fonte").
-        A UI atual pode permanecer como modo de revisão/override.
+    PONTO DE INJEÇÃO DE AGENTE (pós-MVP 1): IMPLEMENTADO no MVP 2 — a sugestão
+    vem de _secao_agente_mercado(), e esta função continua sendo o modo de
+    revisão/override (o usuário sempre pode sobrescrever o valor sugerido).
     """
+    valor_default = float(valor_sugerido) if valor_sugerido is not None else float(dados["valor_avaliacao"] or 0)
     valor_mercado = st.number_input(
         "Valor de mercado estimado (R$)",
         min_value=0.0,
-        value=float(dados["valor_avaliacao"] or 0),
+        value=valor_default,
         step=1_000.0,
         format="%.2f",
         help=(
@@ -59,6 +134,11 @@ def _coletar_inputs_manuais(dados: dict) -> dict:
             f"similares em {dados['bairro']}, {dados['cidade']}. "
             "Alternativa: R$/m² médio da região × metragem."
         ),
+    )
+    fonte = (
+        fonte_sugerida
+        if valor_sugerido is not None and abs(valor_mercado - float(valor_sugerido)) < 0.01
+        else "manual"
     )
 
     # Dívidas e carregamento
@@ -120,7 +200,7 @@ def _coletar_inputs_manuais(dados: dict) -> dict:
             )
 
     return {
-        "fonte":                    "manual",
+        "fonte":                    fonte,
         "valor_mercado":            valor_mercado,
         "iptu_debito":              iptu_debito,
         "condominio_debito":        condominio_debito,
@@ -304,6 +384,21 @@ with SessionLocal() as session:
         for a in analises_salvas
     ]
 
+    job_em_andamento = jobs_service.buscar_job_em_andamento(session, imovel_id, AGENTE_MERCADO)
+    ultimo_envelope = jobs_service.buscar_ultimo_envelope(session, imovel_id, AGENTE_MERCADO)
+    ultimo_job_falhou = None
+    if not job_em_andamento:
+        candidato = jobs_service.buscar_ultimo_job(session, imovel_id, AGENTE_MERCADO)
+        if candidato and candidato.status == StatusJob.falhou:
+            ultimo_job_falhou = candidato
+
+    # Extrai pra fora da sessão antes dela fechar (mesmo padrão de `dados`/`analises_salvas` acima)
+    job_status = job_em_andamento.status if job_em_andamento else (ultimo_job_falhou.status if ultimo_job_falhou else None)
+    job_criado_em = job_em_andamento.criado_em if job_em_andamento else None
+    job_falhou_erro = ultimo_job_falhou.erro if ultimo_job_falhou else None
+    envelope_campos = ultimo_envelope.campos if ultimo_envelope else None
+    envelope_versao_agente = ultimo_envelope.versao_agente if ultimo_envelope else None
+
 # ── Cabeçalho ────────────────────────────────────────────────────────────────
 st.title(f"Imóvel {id_externo}")
 st.caption(f"{dados['endereco']}, {dados['bairro']} — {dados['cidade']}/{dados['uf']}")
@@ -333,7 +428,10 @@ with st.expander("Dados do edital", expanded=True):
 
 # ── Bloco 2 — Inputs ──────────────────────────────────────────────────────────
 st.subheader("Inputs para a análise")
-inputs = _coletar_inputs_manuais(dados)
+valor_sugerido, fonte_sugerida = _secao_agente_mercado(
+    imovel_id, job_status, job_criado_em, job_falhou_erro, envelope_campos, envelope_versao_agente,
+)
+inputs = _coletar_inputs_manuais(dados, valor_sugerido=valor_sugerido, fonte_sugerida=fonte_sugerida)
 
 # ── Bloco 3 — Cálculo ────────────────────────────────────────────────────────
 if st.button("Calcular viabilidade", type="primary", disabled=inputs["valor_mercado"] <= 0):

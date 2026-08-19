@@ -1,0 +1,35 @@
+name: Worker mercado-extractor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Cache navegadores do Playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - run: playwright install --with-deps chromium
+
+      - run: python scripts/worker_mercado.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MERCADO_EXTRACTOR_LLM_MODEL: ${{ vars.MERCADO_EXTRACTOR_LLM_MODEL }}
+          MIN_COMPARAVEIS_CONFIANCA_ALTA: ${{ vars.MIN_COMPARAVEIS_CONFIANCA_ALTA }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
