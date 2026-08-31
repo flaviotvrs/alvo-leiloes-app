@@ -44,6 +44,7 @@ def carregar_imoveis() -> pd.DataFrame:
                 i.tipo,
                 i.endereco,
                 i.url_edital,
+                i.ativo,
                 e.valor_minimo,
                 e.valor_avaliacao,
                 e.desconto_pct,
@@ -55,7 +56,7 @@ def carregar_imoveis() -> pd.DataFrame:
         """)).fetchall()
     return pd.DataFrame(rows, columns=[
         "id", "num_imovel", "cidade", "bairro", "tipo",
-        "endereco", "url_edital", "valor_minimo", "valor_avaliacao",
+        "endereco", "url_edital", "ativo", "valor_minimo", "valor_avaliacao",
         "desconto_pct", "modalidade_venda", "financiamento",
     ])
 
@@ -144,6 +145,17 @@ with st.sidebar:
     )
     st.session_state["_f_analise"] = sel_analise
 
+    opcoes_status = ["Somente ativos", "Somente inativos", "Todos"]
+    sel_status = st.radio(
+        "Status",
+        opcoes_status,
+        index=opcoes_status.index(st.session_state.get("_f_status", "Somente ativos")),
+        horizontal=True,
+        help="Imóveis inativos saíram da última planilha importada da Caixa — "
+             "ficam ocultos por padrão, mas continuam disponíveis para consultar análises antigas.",
+    )
+    st.session_state["_f_status"] = sel_status
+
 # ── Aplicar filtros ───────────────────────────────────────────────────────────
 mask = pd.Series(True, index=df.index)
 if sel_cidade:
@@ -164,12 +176,18 @@ if sel_analise == "Com análise":
 elif sel_analise == "Sem análise":
     mask &= df["analises"] == 0
 
+if sel_status == "Somente ativos":
+    mask &= df["ativo"]
+elif sel_status == "Somente inativos":
+    mask &= ~df["ativo"]
+
 df_filt = df[mask].reset_index(drop=True)
 st.caption(f"{len(df_filt)} imóveis encontrados")
 
 # ── Tabela ────────────────────────────────────────────────────────────────────
 df_display = pd.DataFrame({
     "📊":            df_filt["analises"].apply(lambda n: "📊" if n > 0 else ""),
+    "Status":        df_filt["ativo"].apply(lambda a: "🟢" if a else "⚪ inativo"),
     "N° do imóvel":  df_filt["num_imovel"],
     "Cidade":        df_filt["cidade"],
     "Bairro":        df_filt["bairro"],

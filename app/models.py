@@ -82,6 +82,17 @@ class Imovel(Base):
     possui_cozinha: Mapped[bool | None] = mapped_column(Boolean)
     descricao_parsing_incompleto: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Controle de "planilha como fonte da verdade" (ver app/importers/caixa.py): um
+    # imóvel que deixa de aparecer numa nova importação é desativado, não apagado —
+    # fica de fora das buscas por padrão mas continua disponível para consulta de
+    # análises antigas. `data_planilha_origem` é a "Data de geração" (impressa na
+    # planilha da Caixa) da importação que originou os dados atuais do registro —
+    # usada para não deixar uma planilha antiga, importada por engano, sobrescrever
+    # dados de uma importação mais recente.
+    ativo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    desativado_em: Mapped[datetime | None] = mapped_column(DateTime)
+    data_planilha_origem: Mapped[date | None] = mapped_column(Date)
+
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -90,7 +101,10 @@ class Imovel(Base):
     edital: Mapped[Edital | None] = relationship(back_populates="imovel", uselist=False)
     analises: Mapped[list[AnaliseFinanceira]] = relationship(back_populates="imovel")
 
-    __table_args__ = (UniqueConstraint("fonte", "id_externo", name="uq_imovel_fonte_externo"),)
+    __table_args__ = (
+        UniqueConstraint("fonte", "id_externo", name="uq_imovel_fonte_externo"),
+        Index("ix_imoveis_fonte_uf_ativo", "fonte", "uf", "ativo"),
+    )
 
 
 class Edital(Base):
@@ -183,9 +197,18 @@ class ImportacaoPlanilha(Base):
     nome_arquivo: Mapped[str] = mapped_column(String(300))
     usuario: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(Enum(StatusImportacao), nullable=False)
+
+    # "Data de geração" lida da própria planilha — usada para decidir se ela é
+    # mais recente que a última já aplicada para cada UF (ver app/importers/caixa.py).
+    data_geracao: Mapped[date | None] = mapped_column(Date)
+    ufs_processadas: Mapped[str | None] = mapped_column(String(200))
+
     imoveis_importados: Mapped[int | None] = mapped_column(Integer)
+    imoveis_atualizados: Mapped[int | None] = mapped_column(Integer)
+    imoveis_desativados: Mapped[int | None] = mapped_column(Integer)
     imoveis_ignorados: Mapped[int | None] = mapped_column(Integer)
     mensagem_erro: Mapped[str | None] = mapped_column(Text)
+    avisos: Mapped[str | None] = mapped_column(Text)
 
     iniciado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     finalizado_em: Mapped[datetime | None] = mapped_column(DateTime)
