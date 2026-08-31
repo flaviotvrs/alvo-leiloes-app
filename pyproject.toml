@@ -9,6 +9,8 @@ dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
     "python-dotenv>=1.0",
+    "playwright>=1.45",
+    "litellm>=1.50",
 ]
 
 [project.optional-dependencies]
