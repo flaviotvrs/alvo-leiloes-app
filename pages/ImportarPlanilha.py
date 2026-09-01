@@ -44,11 +44,16 @@ if st.button("Importar", type="primary", disabled=arquivo is None):
         )
 
     if registro.status == StatusImportacao.sucesso:
-        n = registro.imoveis_importados
+        data_fmt = registro.data_geracao.strftime("%d/%m/%Y") if registro.data_geracao else "não identificada"
         st.success(
-            f"Importação concluída: {n} {'imóvel' if n == 1 else 'imóveis'} importado{'' if n == 1 else 's'}, "
-            f"{registro.imoveis_ignorados} já existiam."
+            f"Importação concluída (planilha de {data_fmt}): "
+            f"{registro.imoveis_importados} novo(s), "
+            f"{registro.imoveis_atualizados} atualizado(s), "
+            f"{registro.imoveis_desativados} desativado(s) por não constarem mais na planilha, "
+            f"{registro.imoveis_ignorados} linha(s) ignorada(s)."
         )
+        if registro.avisos:
+            st.warning(registro.avisos)
     else:
         st.error(f"Falha na importação: {registro.mensagem_erro}")
 
@@ -75,13 +80,18 @@ if not historico:
 else:
     df_historico = pd.DataFrame([
         {
-            "Status":     "✅ Sucesso" if h.status == StatusImportacao.sucesso else "❌ Erro",
-            "Data/hora":  h.iniciado_em.strftime("%d/%m/%Y %H:%M") if h.iniciado_em else "—",
-            "Arquivo":    h.nome_arquivo,
-            "Usuário":    h.usuario or "—",
-            "Importados": str(h.imoveis_importados) if h.imoveis_importados is not None else "—",
-            "Ignorados":  str(h.imoveis_ignorados) if h.imoveis_ignorados is not None else "—",
-            "Erro":       h.mensagem_erro or "—",
+            "Status":      "✅ Sucesso" if h.status == StatusImportacao.sucesso else "❌ Erro",
+            "Data/hora":   h.iniciado_em.strftime("%d/%m/%Y %H:%M") if h.iniciado_em else "—",
+            "Geração":     h.data_geracao.strftime("%d/%m/%Y") if h.data_geracao else "—",
+            "UFs":         h.ufs_processadas or "—",
+            "Arquivo":     h.nome_arquivo,
+            "Usuário":     h.usuario or "—",
+            "Novos":       str(h.imoveis_importados) if h.imoveis_importados is not None else "—",
+            "Atualizados": str(h.imoveis_atualizados) if h.imoveis_atualizados is not None else "—",
+            "Desativados": str(h.imoveis_desativados) if h.imoveis_desativados is not None else "—",
+            "Ignorados":   str(h.imoveis_ignorados) if h.imoveis_ignorados is not None else "—",
+            "Avisos":      h.avisos or "—",
+            "Erro":        h.mensagem_erro or "—",
         }
         for h in historico
     ])
